@@ -1,0 +1,761 @@
+substitutions:
+  name: "printer-control"
+  friendly_name: Printer Control
+  
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: false
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+#    type: arduino
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: y
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+
+# Enable logging
+logger:
+  logs:
+    component: ERROR
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret haapi_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  manual_ip:
+    static_ip: 10.0.0.230
+    gateway: 10.0.0.1
+    subnet: 255.255.255.0
+    dns1: 75.75.75.75
+    dns2: 75.75.76.76
+  
+  fast_connect: off
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Printer Control Fallback"
+    password: !secret haapi_password
+
+captive_portal:
+#--------------------------------------------------------------------------------------------------
+psram:
+  mode: octal
+  speed: 80MHz
+#--------------------------------------------------------------------------------------------------
+i2c:
+  - id: i2cbus_a
+    sda: GPIO08
+    scl: GPIO09
+    scan: True
+#--------------------------------------------------------------------------------------------------
+ch422g:
+  - i2c_id: i2cbus_a
+    id: ch422g_hub
+#--------------------------------------------------------------------------------------------------
+sx1509:
+  - id: sx1509_hub1
+    address: 0x70
+    i2c_id: i2cbus_a
+#--------------------------------------------------------------------------------------------------
+switch:
+  - platform: restart
+    name: "Printer Control Restart"
+#---------------------------------------------------
+  - platform: gpio
+    name: Printer Backlight
+    id: backlight_switch
+    pin:
+      ch422g: ch422g_hub
+      number: 2
+      mode:
+        output: true
+    inverted: true
+    restore_mode: ALWAYS_OFF
+#---------------------------------------------------
+  - platform: gpio
+    name: "Printer Power"
+    id: printer_switch
+    pin:
+      sx1509: sx1509_hub1
+      number: 0
+      inverted: true
+      mode:
+        output: true
+    restore_mode: ALWAYS_OFF
+#---------------------------------------------------
+  - platform: gpio
+    name: "Printer Fans"
+    id: printer_fan_switch
+    pin:
+      sx1509: sx1509_hub1
+      number: 1
+      inverted: true
+      mode:
+        output: true
+    restore_mode: ALWAYS_OFF
+#---------------------------------------------------
+  - platform: gpio
+    name: "Printer Lights"
+    id: printer_lights_switch
+    pin:
+      sx1509: sx1509_hub1
+      number: 5
+      inverted: true
+      mode:
+        output: true
+    restore_mode: ALWAYS_OFF
+#---------------------------------------------------
+  - platform: gpio
+    name: "Printer Spare Relay"
+    id: printer_spare_relay
+    pin:
+      sx1509: sx1509_hub1
+      number: 6
+      inverted: true
+      mode:
+        output: true
+    restore_mode: ALWAYS_OFF
+#---------------------------------------------------
+  - platform: template
+    name: Clock Antiburn
+    id: switch_clock_antiburn
+    icon: mdi:television-shimmer
+    optimistic: true
+    entity_category: "config"
+    turn_on_action:
+      - logger.log: "Starting Clock Antiburn"
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+            - delay: 1s
+      - lvgl.pause:
+          show_snow: true
+    turn_off_action:
+      - logger.log: "Stopping Clock Antiburn"
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+#--------------------------------------------------------------------------------------------------
+sensor:
+- platform: wifi_signal
+  name: "Printer Control Signal Strength"
+  update_interval: 60s
+#---------------------------------------------------
+- platform: ccs811
+  address: 0x5A
+  i2c_id: i2cbus_a
+  update_interval: 60s
+  eco2:
+    name: "PrinterEnviro eCO2"
+    id: printer_eco2
+    device_class: carbon_dioxide
+    state_class: measurement
+    unit_of_measurement: ppm
+    on_value:
+      - lvgl.label.update:
+          id: display_printer_eCO2
+          text:
+            format:  "%0.0f eCO2"
+            args: [ 'x' ]  
+  tvoc:
+    name: "PrinterEnviro VOC"
+    id: printer_voc
+    device_class: volatile_organic_compounds_parts
+    state_class: measurement
+    unit_of_measurement: ppm
+    on_value:
+      - lvgl.label.update:
+          id: display_printer_voc
+          text:
+            format:  "%0.0f VOC"
+            args: [ 'x' ]  
+#---------------------------------------------------
+- platform: bme280_i2c
+  address: 0x76
+  i2c_id: i2cbus_a
+  update_interval: 60s
+#---------------------------------------------------
+  temperature:
+    name: "PrinterEnviro Temperature"
+    oversampling: 16x
+    id: printer_temperature
+    unit_of_measurement: "°F"
+    state_class: measurement
+    device_class: temperature
+    filters:
+      - lambda: return x * (9.0/5.0) + 32.0; # Convert C to F
+      - offset: -4 #Placeholder for offset
+    on_value:
+      - lvgl.label.update:
+          id: display_printer_temp
+          text:
+            format:  "%.0f°F"
+            args: [ 'x' ]  
+#---------------------------------------------------
+  humidity:
+    name: "PrinterEnviro Humidity"
+    id: printer_humidity
+    unit_of_measurement: "%"
+    state_class: measurement
+    device_class: humidity
+    on_value:
+      - lvgl.label.update:
+          id: display_printer_humidity
+          text:
+            format:  "%.0f%%"
+            args: [ 'x' ]  
+#---------------------------------------------------
+#  pressure:
+#    name: "PrinterEnviro Pressure"
+#    id: printer_pressure
+#    unit_of_measurement: "inHg"
+#    state_class: measurement
+#    device_class: atmospheric_pressure
+#    accuracy_decimals: 2
+#    filters:
+#      - offset: 210.8373 # Offset to compensate for altitude
+#      - lambda: return x * 0.02953; # Convert hectopascals (hPa) to inches of mercury (inHg),
+#    on_value:
+#      - lvgl.label.update:
+#          id: display_pressure
+#          text:
+#            format:  "%3.2f"
+#            args: [ 'x' ]
+#--------------------------------------------------------------------------------------------------
+- platform: homeassistant
+  id: office_brightness
+  entity_id: sensor.eddys_office_ambient_light
+  on_value:
+    then:
+    - lvgl.label.update:
+        id: header_display_time
+        text:
+          format:  "%3.2f"
+          args: [ 'x' ]
+    - if:
+        condition:
+          lambda: 'return (x < (id(display_threshold).state));'
+        then:
+          - switch.turn_on: backlight_switch #Inverted logic - "turn_on" will turn the backlight off
+        else:
+          - switch.turn_off: backlight_switch #Inverted logic - "turn_off" will turn the backlight on
+#--------------------------------------------------------------------------------------------------
+text_sensor:
+- platform: wifi_info
+  ip_address:
+    name: Printer Control IP
+  ssid:
+    name: Printer Control SSID
+  bssid:
+    name: Printer Control BSSID
+  mac_address:
+    name: Printer Control Mac
+#--------------------------------------------------------------------------------------------------
+udp:
+  binary_sensors:
+    - page_turn
+#--------------------------------------------------------------------------------------------------
+binary_sensor:
+  - platform: udp
+    provider: eddys-office
+    id: page_turn
+    on_press:
+      then:
+        lvgl.page.next
+#--------------------------------------------------------------------------------------------------
+time:
+  - platform: homeassistant
+    id: esptime
+    on_time_sync:
+      - script.execute: time_update
+    on_time:
+      - minutes: '*'
+        seconds: 0
+        then:
+          - script.execute: time_update
+      - hours: '10,22'
+        minutes: 0
+        seconds: 0
+        then:
+          - switch.turn_on: switch_clock_antiburn
+      - hours: '10,22'
+        minutes: 1
+        seconds: 0
+        then:
+          - switch.turn_off: switch_clock_antiburn
+          - script.execute: time_update
+#      - days_of_week: MON,TUE,WED,THU,FRI
+#        hours: 14
+#        minutes: 0
+#        seconds: 0
+#        then:
+#          - lvgl.page.show: test_page
+#--------------------------------------------------------------------------------------------------
+font:
+  - file: "gfonts://Concert One"
+    id: concert_40
+    size: 40
+    bpp: 4
+
+  - file: "gfonts://Concert One"
+    id: concert_80
+    size: 80
+    bpp: 4
+
+  - file: "fonts/G7_Segment7_S5.ttf"
+    id: big_seven_seg
+    size: 280
+    bpp: 4
+    glyphs: [
+      "0","1","2","3","4","5","6","7","8","9","-",
+      "\u0020", #space
+      "\u003A", #colon
+      ]
+# Define backlight pin------------------------------------------------------------------------------
+output:
+  - platform: ledc
+    pin: GPIO6
+    id: pwm_backlight
+# Define a monochromatic, dimmable light for the backlight------------------------------------------
+light:
+  - platform: monochromatic
+    output: pwm_backlight
+    name: "Display PWM Backlight"
+    id: pwm_back_light
+    restore_mode: ALWAYS_ON
+#---------------------------------------------------------------------------------------------------
+display:
+  - platform: rpi_dpi_rgb
+    id: my_display
+    auto_clear_enabled: false
+    update_interval: never
+    color_order: RGB
+    pclk_frequency: 16MHz
+    dimensions:
+      width: 800
+      height: 480
+    reset_pin:
+      ch422g: ch422g_hub
+      number: 3
+#    enable_pin:
+#      ch422g: ch422g_hub
+#      number: 2
+    de_pin:
+      number: 5
+    hsync_pin:
+      number: 46
+      ignore_strapping_warning: true
+    vsync_pin:
+      number: 3
+      ignore_strapping_warning: true
+    pclk_pin: 7
+    pclk_inverted: false
+    hsync_back_porch: 10 #30
+    hsync_front_porch: 20 #210 
+    hsync_pulse_width: 10 #30
+    vsync_back_porch: 10 #4
+    vsync_front_porch: 10 #4
+    vsync_pulse_width: 10 #4
+    data_pins:
+      red:
+        - 1         #r3
+        - 2         #r4
+        - 42        #r5
+        - 41        #r6
+        - 40        #r7
+      blue:
+        - 14        #b3
+        - 38        #b4
+        - 18        #b5
+        - 17        #b6
+        - 10        #b7
+      green:
+        - 39        #g2
+        - 0         #g3
+        - 45        #g4
+        - 48        #g5
+        - 47        #g6
+        - 21        #g7
+#--------------------------------------------------------------------------------------------------
+touchscreen:
+  platform: gt911
+  address: 0x5D
+  i2c_id: i2cbus_a
+  id: my_touchscreen
+  update_interval: 16ms
+  interrupt_pin: GPIO4
+  reset_pin:
+    ch422g: ch422g_hub
+    number: 1
+    mode: output
+  on_touch:
+    - switch.turn_off: backlight_switch #Inverted logic - "turn_off" will turn the backlight on
+    - script.execute: time_update
+    - lvgl.resume:
+    - lvgl.widget.redraw:
+    - lambda: |-
+          ESP_LOGI("cal", "x=%d, y=%d, x_raw=%d, y_raw=%0d",
+              touch.x,
+              touch.y,
+              touch.x_raw,
+              touch.y_raw
+              );
+#--------------------------------------------------------------------------------------------------
+lvgl:
+  displays:
+    - my_display
+  buffer_size: 25%
+  disp_bg_color: 0x000000
+#---------------------------------------------------
+  touchscreens:
+    - touchscreen_id: my_touchscreen
+      long_press_time: 2000ms
+#---------------------------------------------------
+  style_definitions:
+    - id: header_footer
+      bg_color: 0x000000 #0x2F8CD8
+      bg_opa: COVER
+      border_opa: TRANSP
+      radius: 0
+      pad_all: 0
+      pad_row: 0
+      pad_column: 0
+      text_font: montserrat_28
+      border_color: 0x000000 #0x0077b3
+      text_color: 0x323AA8 #0xFFFFFF
+      width: 100%
+      height: 50
+#---------------------------------------------------
+    - id: enviro_label_style
+      grid_cell_x_align: STRETCH
+      grid_cell_y_align: CENTER
+      text_font: concert_80
+      text_color: 0x323AA8
+      text_align: CENTER
+      outline_width: 0
+      outline_color: 0xFFFF00
+#---------------------------------------------------
+    - id: button_label_style
+      align: CENTER
+      text_font: concert_80
+      text_color: 0x000000
+      text_align: CENTER
+      border_opa: TRANSP
+      outline_width: 0
+      outline_color: 0xFFFF00
+#---------------------------------------------------
+    - id: button_off_style
+      grid_cell_x_align: STRETCH
+      grid_cell_y_align: CENTER
+      border_opa: TRANSP
+      align: CENTER
+      bg_color: 0x700B15
+#---------------------------------------------------
+    - id: button_on_style
+      border_opa: TRANSP
+      align: CENTER
+      bg_color: 0x2D6E0A
+#---------------------------------------------------
+  top_layer:
+    widgets:
+      - label:
+          id: header_display_time
+          styles: header_footer
+          align: top_mid
+          text: "--:--"
+          text_align: CENTER
+          text_font: concert_40
+          width: 100%
+      - buttonmatrix:
+          align: bottom_mid
+          styles: header_footer
+          pad_all: 0
+          outline_width: 0
+          id: top_layer
+          items:
+            styles: header_footer
+          rows:
+            - buttons:
+              - id: page_prev
+                text: "\uF053"
+                on_press:
+                  then:
+                    lvgl.page.previous:
+              - id: page_home
+                text: "\uF015"
+                on_press:
+                  then:
+                    lvgl.page.show: main_page
+              - id: page_next
+                text: "\uF054"
+                on_press:
+                  then:
+                    lvgl.page.next:
+  #--------------------------------------------------------------------------------------------------
+  pages:
+    - id: main_page
+      bg_color: 0x000000
+      widgets:
+        - obj:
+            align: CENTER
+            width: 780
+            height: 380
+            x: 0
+            y: 0
+            pad_all: 0
+            bg_opa: TRANSP
+            border_opa: TRANSP
+            outline_width: 0
+            outline_color: 0xFFFFFF
+            layout:
+              type: grid
+              grid_columns: [FR(1)]
+              grid_rows: [FR(1)]
+            widgets:
+              - label:
+                  id: display_time
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 0
+                  text: "--:--"
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: CENTER
+                  text_font: big_seven_seg
+                  text_color: 0x323AA8
+                  text_align: CENTER
+                  text_opa: 100%
+                  outline_width: 0
+                  outline_color: 0xFFFF00
+#---------------------------------------------------
+    - id: office_environment
+      bg_color: 0x000000
+      widgets:
+        - obj:
+            align: CENTER
+            width: 780
+            height: 380
+            x: 0
+            y: 0
+            pad_all: 0
+            bg_opa: TRANSP
+            border_opa: TRANSP
+            outline_width: 0
+            outline_color: 0xFFFFFF
+            layout:
+              type: grid
+              grid_columns: [FR(1),FR(1)]
+              grid_rows: [FR(1),FR(1)]
+            widgets:
+#---------------------------------------------------
+              - label:
+                  id: display_printer_temp
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 0
+                  text: "--°F"
+                  styles: enviro_label_style
+#---------------------------------------------------
+              - label:
+                  id: display_printer_humidity
+                  grid_cell_column_pos: 1
+                  grid_cell_row_pos: 0
+                  text: "--%"
+                  styles: enviro_label_style
+#---------------------------------------------------
+              - label:
+                  id: display_printer_eCO2
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 1
+                  text: "-- eCO2"
+                  styles: enviro_label_style
+#---------------------------------------------------
+              - label:
+                  id: display_printer_voc
+                  grid_cell_column_pos: 1
+                  grid_cell_row_pos: 1
+                  text: "-- VOC"
+                  styles: enviro_label_style
+#--------------------------------------------------------------------------------------------------
+    - id: printer_buttons
+      bg_color: 0x000000
+      widgets:
+        - obj:
+            align: CENTER
+            width: 780
+            height: 380
+            x: 0
+            y: 0
+            pad_all: 0
+            bg_opa: TRANSP
+            border_opa: TRANSP
+            outline_width: 0
+            outline_color: 0xFFFFFF
+            layout:
+              type: grid
+              grid_columns: [FR(1),FR(1)]
+              grid_rows: [FR(1),FR(1)]
+            widgets:
+#---------------------------------------------------
+              - button:
+                  id: printer_power_button
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 0
+                  checkable: true
+                  styles: button_off_style
+                  checked:
+                    styles: button_on_style
+                  widgets:
+                    - label:
+                        id: printer_power_button_label
+                        text: "Printer"
+                        styles: button_label_style
+#                  on_click:
+                  on_long_press:
+                    switch.toggle: printer_switch
+#---------------------------------------------------
+              - button:
+                  id: lights_power_button
+                  grid_cell_column_pos: 1
+                  grid_cell_row_pos: 0
+                  checkable: true
+                  styles: button_off_style
+                  checked:
+                    styles: button_on_style
+                  widgets:
+                    - label:
+                        id: printer_lights_button_label
+                        text: "Lights"
+                        styles: button_label_style
+                  on_click:
+                    switch.toggle: printer_lights_switch
+#---------------------------------------------------
+              - button:
+                  id: fans_power_button
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 1
+                  checkable: true
+                  styles: button_off_style
+                  checked:
+                    styles: button_on_style
+                  widgets:
+                    - label:
+                        id: printer_fans_button_label
+                        text: "Fans"
+                        styles: button_label_style
+                  on_click:
+                    switch.toggle: printer_fan_switch
+#---------------------------------------------------
+              - button:
+                  id: spare_power_button
+                  grid_cell_column_pos: 1
+                  grid_cell_row_pos: 1
+                  checkable: true
+                  styles: button_off_style
+                  checked:
+                    styles: button_on_style
+                  widgets:
+                    - label:
+                        id: printer_spare_button_label
+                        text: "Spare"
+                        styles: button_label_style
+                  on_click:
+                    switch.toggle: printer_spare_relay
+#---------------------------------------------------
+    - id: test_page
+      bg_color: 0x000000
+      widgets:
+        - obj:
+            align: CENTER
+            width: 780
+            height: 380
+            x: 0
+            y: 0
+            pad_all: 0
+            bg_opa: TRANSP
+            border_opa: TRANSP
+            outline_width: 0
+            outline_color: 0xFFFFFF
+            layout:
+              type: grid
+              grid_columns: [FR(1)]
+              grid_rows: [FR(1)]
+            widgets:
+              - label:
+                  id: test_text
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 0
+                  text: "Break Time"
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: CENTER
+                  text_font: concert_80
+                  text_color: 0x323AA8
+                  text_align: CENTER
+                  text_opa: 100%
+                  outline_width: 0
+                  outline_color: 0xFFFF00
+#--------------------------------------------------------------------------------------------------
+number:
+  - platform: template
+    name: Screen Lux Threshold
+    optimistic: true
+    id: display_threshold
+    unit_of_measurement: "lx"
+    initial_value: 1
+    restore_value: true
+    min_value: 1
+    max_value: 1000
+    step: 0.1
+    mode: box
+#--------------------------------------------
+  - platform: template
+    name: Text Opacity
+    optimistic: true
+    id: text_opacity
+    unit_of_measurement: "%"
+    initial_value: 100
+    restore_value: true
+    min_value: 1
+    max_value: 100
+    step: 1
+    mode: box
+    on_value: 
+      then:
+        - lvgl.label.update:
+            id: display_time
+            text_opa: !lambda return (id(text_opacity).state) / 100 * 255;
+#--------------------------------------------------------------------------------------------------
+script:
+# This script updates the time
+#snprintf(time_buf, sizeof(time_buf), "%2d:%02d%s", hour_12, now.minute, is_pm ? "pm" : "am"); // This does have the ap/pm flag
+  - id: time_update
+    then:
+      - lvgl.label.update:
+          id:
+#            - header_display_time
+            - display_time
+          text: !lambda |-
+            static char time_buf[17];
+            auto now = id(esptime).now();            
+            bool is_pm = now.hour >= 12;
+            int hour_12 = now.hour % 12;
+            if (hour_12 == 0) {
+                hour_12 = 12;
+            }
+            snprintf(time_buf, sizeof(time_buf), "%2d:%02d", hour_12, now.minute); // This does not have the ap/pm flag
+            return time_buf;
