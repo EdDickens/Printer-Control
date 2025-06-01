@@ -388,7 +388,7 @@ touchscreen:
 lvgl:
   displays:
     - my_display
-  buffer_size: 100%
+  buffer_size: 12%
   disp_bg_color: 0x000000
 #---------------------------------------------------
   touchscreens:
