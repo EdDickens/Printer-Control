@@ -195,10 +195,10 @@ text_sensor:
 - platform: wifi_info
   ip_address:
     name: ${friendly_name} IP
+    update_interval: 1h
   ssid:
     name: ${friendly_name} SSID
-  bssid:
-    name: ${friendly_name} BSSID
+    update_interval: 1h
   mac_address:
     name: ${friendly_name} Mac
 #--------------------------------------
